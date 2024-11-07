@@ -1,5 +1,4 @@
 from py4j.protocol import NULL_TYPE
-from pyspark.sql import Column
 from pyspark.sql.window import Window
 from pyspark.sql.functions import (
     col,
@@ -16,12 +15,9 @@ from pyspark.sql.functions import (
     first,
     lit,
     year,
-    to_timestamp, coalesce,
+    to_timestamp,
+    coalesce,
 )
-from pyspark.sql.types import TimestampType, DoubleType
-import uuid
-
-from requests import session
 
 
 class UserEventsFeatures:
@@ -37,9 +33,9 @@ class UserEventsFeatures:
 
     def generate_features(self):
         session_id, is_session_last_event, page_stay_duration = (
-            self.is_session_last_event()
+            self.get_session_features()
         )
-        session_year = self.get_session_year()
+        session_year, session_date = self.get_session_dates()
         return (
             self.user_events_df.withColumn(
                 "session_id",
@@ -57,32 +53,35 @@ class UserEventsFeatures:
                 "session_year",
                 session_year,
             )
+            .withColumn(
+                "session_date",
+                session_date,
+            )
         )
 
     @staticmethod
-    def is_session_last_event(session_expiration_minutes: int = 30):
+    def get_session_features(session_expiration_minutes: int = 30):
         """
-        Determines if an event is the last event in its session
+        Summary:
+            These set of transformations will divide the user app events into sessions and count how long does the user
+            stay in each page before proceeding to the next event.
 
         Args:
             session_expiration_minutes: Int
                 Number of minutes inbetween events before considering a session has ended.
                 Default value is 30 minutes
 
-        Dataframe column input:
-            event_timestamp: Column
-                Timestamp when event occurred.
-
         Returns:
-            Is_session_last_event: Bool
+            session_id: Str
+                - A concatenation of each 'session' created from the event date + user id + rolling sum of the session number
+            is_session_last_event: Bool
                 - True if:
                     - Ordered by event timestamp, previous timestamp event occurred 30 minutes before last event
                     - Last event that occurred per session.
                 - False otherwise.
+            page_stay_duration: Double
+                - Duration of user in the event before next event in session occurs. If no next event, value is set to 0.
 
-
-        Logic:
-            Uses a conditional statement to check if age is above 40.
         """
         # Define window by user_id and order by event_timestamp
         window_func = Window.partitionBy("user_id").orderBy("event_timestamp")
@@ -100,7 +99,7 @@ class UserEventsFeatures:
             1,
         ).otherwise(0)
 
-        # Create session_id by using rolling window sum over the session boundaries
+        # Create session_id by using the event date + user id + rolling window sum over the session boundaries
         session_id = concat_ws(
             "-",
             to_date("event_timestamp"),
@@ -125,16 +124,19 @@ class UserEventsFeatures:
         page_stay_duration_window = Window.partitionBy(session_id).orderBy(
             "event_timestamp"
         )
-        page_stay_duration = coalesce(lead(col("event_timestamp"), 1).over(
-            page_stay_duration_window
-        ).cast("double") - col("event_timestamp").cast("double"),
-        lit(0).cast("double"),)
+        page_stay_duration = coalesce(
+            lead(col("event_timestamp"), 1)
+            .over(page_stay_duration_window)
+            .cast("double")
+            - col("event_timestamp").cast("double"),
+            lit(0).cast("double"),
+        )
 
         return session_id, is_session_last_event, page_stay_duration
 
     @staticmethod
-    def get_session_year():
-        return year(col("event_timestamp"))
+    def get_session_dates():
+        return year(col("event_timestamp")), to_date("event_timestamp")
 
 
 class UserEventsFeaturesAggregate:
@@ -144,7 +146,7 @@ class UserEventsFeaturesAggregate:
 
     def generate_aggregated_df(self):
         user_events_aggregated_df = self.user_events_denormalized_df.groupBy(
-            "user_id", "session_year", "session_id"
+            "user_id", "session_year", "session_date", "session_id"
         ).agg(
             min(to_timestamp(col("event_timestamp"))).alias("session_start_at"),
             max(to_timestamp(col("event_timestamp"))).alias("session_end_at"),
@@ -161,6 +163,7 @@ class UserEventsFeaturesAggregate:
             "device_id",
             "time_spent_in_shopping",
             "session_year",
+            "session_date",
         )
 
     @staticmethod
