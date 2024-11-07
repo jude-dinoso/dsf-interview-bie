@@ -5,7 +5,6 @@ from datetime import datetime, timedelta
 
 from pyspark.sql import SparkSession
 from pyspark.sql.functions import col
-from pyspark.sql.types import StructType
 
 from utils import is_valid_date
 from schema import user_events_schema, user_events_table_name
@@ -57,7 +56,7 @@ if __name__ == "__main__":
     if not spark.catalog.tableExists(user_events_table_name):
         user_events_aggregated_df_table = (
             spark.createDataFrame(spark.sparkContext.emptyRDD(), user_events_schema)
-            .write.partitionBy("session_year")
+            .write.partitionBy("session_date")
             .saveAsTable(user_events_table_name)
         )
 
@@ -83,7 +82,9 @@ if __name__ == "__main__":
     # Write Aggregated User Events table
     user_events_aggregated_df_staging.write.insertInto(user_events_table_name)
 
-    user_events_denormalized_df.write.mode("overwrite").option("compression", "snappy").parquet("sample_denormalized")
-    user_events_aggregated_df_staging.write.mode("overwrite").option("compression", "snappy").parquet("sample_aggregated")
-
-
+    user_events_denormalized_df.write.mode("overwrite").option(
+        "compression", "snappy"
+    ).parquet("sample_denormalized")
+    user_events_aggregated_df_staging.write.mode("overwrite").option(
+        "compression", "snappy"
+    ).parquet("sample_aggregated")

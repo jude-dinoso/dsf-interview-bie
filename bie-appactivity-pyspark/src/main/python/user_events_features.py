@@ -1,5 +1,4 @@
 from py4j.protocol import NULL_TYPE
-from pyspark.sql import Column
 from pyspark.sql.window import Window
 from pyspark.sql.functions import (
     col,
@@ -16,12 +15,9 @@ from pyspark.sql.functions import (
     first,
     lit,
     year,
-    to_timestamp, coalesce,
+    to_timestamp,
+    coalesce,
 )
-from pyspark.sql.types import TimestampType, DoubleType
-import uuid
-
-from requests import session
 
 
 class UserEventsFeatures:
@@ -39,7 +35,7 @@ class UserEventsFeatures:
         session_id, is_session_last_event, page_stay_duration = (
             self.is_session_last_event()
         )
-        session_year = self.get_session_year()
+        session_year, session_date = self.get_session_dates()
         return (
             self.user_events_df.withColumn(
                 "session_id",
@@ -56,6 +52,10 @@ class UserEventsFeatures:
             .withColumn(
                 "session_year",
                 session_year,
+            )
+            .withColumn(
+                "session_date",
+                session_date,
             )
         )
 
@@ -125,16 +125,19 @@ class UserEventsFeatures:
         page_stay_duration_window = Window.partitionBy(session_id).orderBy(
             "event_timestamp"
         )
-        page_stay_duration = coalesce(lead(col("event_timestamp"), 1).over(
-            page_stay_duration_window
-        ).cast("double") - col("event_timestamp").cast("double"),
-        lit(0).cast("double"),)
+        page_stay_duration = coalesce(
+            lead(col("event_timestamp"), 1)
+            .over(page_stay_duration_window)
+            .cast("double")
+            - col("event_timestamp").cast("double"),
+            lit(0).cast("double"),
+        )
 
         return session_id, is_session_last_event, page_stay_duration
 
     @staticmethod
-    def get_session_year():
-        return year(col("event_timestamp"))
+    def get_session_dates():
+        return year(col("event_timestamp")), to_date("event_timestamp")
 
 
 class UserEventsFeaturesAggregate:
@@ -144,7 +147,7 @@ class UserEventsFeaturesAggregate:
 
     def generate_aggregated_df(self):
         user_events_aggregated_df = self.user_events_denormalized_df.groupBy(
-            "user_id", "session_year", "session_id"
+            "user_id", "session_year", "session_date", "session_id"
         ).agg(
             min(to_timestamp(col("event_timestamp"))).alias("session_start_at"),
             max(to_timestamp(col("event_timestamp"))).alias("session_end_at"),
@@ -161,6 +164,7 @@ class UserEventsFeaturesAggregate:
             "device_id",
             "time_spent_in_shopping",
             "session_year",
+            "session_date",
         )
 
     @staticmethod
