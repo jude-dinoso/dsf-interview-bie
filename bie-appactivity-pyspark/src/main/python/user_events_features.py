@@ -33,7 +33,7 @@ class UserEventsFeatures:
 
     def generate_features(self):
         session_id, is_session_last_event, page_stay_duration = (
-            self.is_session_last_event()
+            self.get_session_features()
         )
         session_year, session_date = self.get_session_dates()
         return (
@@ -60,29 +60,28 @@ class UserEventsFeatures:
         )
 
     @staticmethod
-    def is_session_last_event(session_expiration_minutes: int = 30):
+    def get_session_features(session_expiration_minutes: int = 30):
         """
-        Determines if an event is the last event in its session
+        Summary:
+            These set of transformations will divide the user app events into sessions and count how long does the user
+            stay in each page before proceeding to the next event.
 
         Args:
             session_expiration_minutes: Int
                 Number of minutes inbetween events before considering a session has ended.
                 Default value is 30 minutes
 
-        Dataframe column input:
-            event_timestamp: Column
-                Timestamp when event occurred.
-
         Returns:
-            Is_session_last_event: Bool
+            session_id: Str
+                - A concatenation of each 'session' created from the event date + user id + rolling sum of the session number
+            is_session_last_event: Bool
                 - True if:
                     - Ordered by event timestamp, previous timestamp event occurred 30 minutes before last event
                     - Last event that occurred per session.
                 - False otherwise.
+            page_stay_duration: Double
+                - Duration of user in the event before next event in session occurs. If no next event, value is set to 0.
 
-
-        Logic:
-            Uses a conditional statement to check if age is above 40.
         """
         # Define window by user_id and order by event_timestamp
         window_func = Window.partitionBy("user_id").orderBy("event_timestamp")
@@ -100,7 +99,7 @@ class UserEventsFeatures:
             1,
         ).otherwise(0)
 
-        # Create session_id by using rolling window sum over the session boundaries
+        # Create session_id by using the event date + user id + rolling window sum over the session boundaries
         session_id = concat_ws(
             "-",
             to_date("event_timestamp"),
